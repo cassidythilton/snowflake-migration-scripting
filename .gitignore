@@ -1,0 +1,84 @@
+# Snowflake Migration Script .gitignore
+
+# Private keys and sensitive files
+*.p8
+*.pem
+rsa_key*
+private_key*
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Configuration files with secrets (create templates instead)
+config.py
+secrets.py
+credentials.json
+
+# Data files
+*.csv
+*.json
+*.parquet
+data/
+staging/
+
+# Test outputs
+test_results/
+coverage.xml
+htmlcov/
+.coverage
+.pytest_cache/
