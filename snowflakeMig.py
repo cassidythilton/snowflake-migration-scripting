@@ -26,17 +26,41 @@ Tested with snowflake-snowpark-python >= 1.15
 # ================
 # pip install snowflake-snowpark-python
 #
-# 🔑 AUTHENTICATION SETUP:
-# =========================
-# 1. Generate RSA key pair for JWT authentication:
+# 🔑 AUTHENTICATION SETUP (JWT with RSA Keys):
+# ==============================================
+# This script uses JWT authentication with RSA key pairs for secure, password-free connections.
+#
+# STEP 1: Generate RSA Key Pair
 #    $ openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
 #    $ openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+#    This creates: rsa_key.p8 (private, keep secret) and rsa_key.pub (public, upload to Snowflake)
 #
-# 2. Upload public key to Snowflake user account:
-#    ALTER USER <username> SET RSA_PUBLIC_KEY='<your_public_key_content>';
-#    (Remove -----BEGIN/END----- headers and join lines)
+# STEP 2: Extract Public Key Content (remove headers and join lines)
+#    $ grep -v "BEGIN\|END" rsa_key.pub | tr -d '\n'
+#    Copy the output (long string starting with MIIB...)
 #
-# 3. Update private_key_file path in SOURCE and TARGET configs below
+# STEP 3: Upload Public Key to BOTH Snowflake Accounts
+#    Connect to each account and run:
+#    ALTER USER <your_username> SET RSA_PUBLIC_KEY='<public_key_content_from_step2>';
+#    DESC USER <your_username>;  -- Verify RSA_PUBLIC_KEY is set
+#
+# STEP 4: Secure Private Key
+#    $ chmod 600 rsa_key.p8
+#    $ mkdir -p ~/.ssh && mv rsa_key.p8 ~/.ssh/snowflake_rsa_key.p8
+#
+# STEP 5: Update private_key_file paths in SOURCE and TARGET configs below
+#    Use absolute path: "/Users/your_username/.ssh/snowflake_rsa_key.p8"
+#
+# STEP 6: Find Your Account Identifiers
+#    Look at your Snowflake URL: https://<ACCOUNT_ID>.snowflakecomputing.com
+#    Examples: ABC12345.us-east-1, mycompany, XYZ67890-AB12345
+#
+# STEP 7: Test Authentication (optional)
+#    from snowflake.snowpark import Session
+#    config = {"account": "...", "user": "...", "authenticator": "SNOWFLAKE_JWT", 
+#              "private_key_file": "...", "role": "ACCOUNTADMIN", "warehouse": "COMPUTE_WH"}
+#    session = Session.builder.configs(config).create()
+#    print(session.sql("SELECT CURRENT_USER(), CURRENT_ROLE()").collect())
 #
 # ⚙️  CONFIGURATION REQUIRED:
 # ===========================

@@ -57,77 +57,249 @@ This repository contains a robust Python script for migrating tables, data, and 
 
 ## 🔑 Authentication Setup
 
+This tool uses **JWT (JSON Web Token) authentication** with RSA key pairs for secure, password-free connections to Snowflake. Follow these steps carefully:
+
 ### 1. Generate RSA Key Pair
 
+Generate a 2048-bit RSA key pair for JWT authentication:
+
 ```bash
-# Generate private key
+# Generate private key in PKCS#8 format (required by Snowflake)
 openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
 
-# Generate public key
+# Generate corresponding public key  
 openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
 ```
 
-### 2. Configure Snowflake User
+This creates two files:
+- `rsa_key.p8` - **Private key** (keep secret, used by this script)
+- `rsa_key.pub` - **Public key** (upload to Snowflake)
 
-Upload the public key to your Snowflake user account:
+### 2. Upload Public Key to Snowflake
+
+#### Step 2a: Prepare the Public Key
+Extract the public key content without headers:
+
+```bash
+# Remove BEGIN/END headers and join lines
+grep -v "BEGIN\|END" rsa_key.pub | tr -d '\n'
+```
+
+Copy the output (long string starting with `MIIB...`).
+
+#### Step 2b: Configure Your Snowflake User
+Connect to Snowflake and run this SQL for **both your source and target accounts**:
 
 ```sql
--- Copy the content of rsa_key.pub (without BEGIN/END headers)
-ALTER USER <your_username> SET RSA_PUBLIC_KEY='<public_key_content>';
+-- Replace 'YOUR_USERNAME' with your actual Snowflake username
+-- Replace '<public_key_content>' with the key string from Step 2a
+ALTER USER YOUR_USERNAME SET RSA_PUBLIC_KEY='<public_key_content>';
+
+-- Verify the key was set correctly
+DESC USER YOUR_USERNAME;
+```
+
+**Important Notes:**
+- Run this command in **both source and target** Snowflake accounts
+- The username must be the same in both accounts
+- You need ACCOUNTADMIN privileges or OWNERSHIP on the user account
+
+#### Step 2c: Test JWT Authentication
+Verify JWT authentication works:
+
+```sql
+-- Check current authentication method
+SELECT CURRENT_USER(), CURRENT_ROLE();
+
+-- Your connection should show as JWT authenticated in session info
 ```
 
 ### 3. Secure Your Private Key
 
+**Critical Security Steps:**
+
 ```bash
-# Set appropriate permissions
+# Set restrictive permissions (owner read-only)
 chmod 600 rsa_key.p8
 
-# Store in a secure location
+# Move to secure location 
+mkdir -p ~/.ssh
 mv rsa_key.p8 ~/.ssh/snowflake_rsa_key.p8
+
+# Verify permissions
+ls -la ~/.ssh/snowflake_rsa_key.p8
+# Should show: -rw------- (600 permissions)
 ```
 
-## ⚙️ Configuration
+### 4. Configure Script Authentication
 
-Edit the **USER CONFIG** section in `snowflakeMig.py`:
+Update the script configuration to use your RSA private key:
 
 ```python
-# Your Snowflake username (same in both accounts)
-USERNAME = "your_username"
+# In snowflakeMig.py, update both SOURCE and TARGET sections:
 
-# Source Snowflake account
 SOURCE = {
-    "account": "ABC12345-XY67890",  # Your source account identifier
-    "user": "your_username",
+    "account": "YOUR_SOURCE_ACCOUNT",
+    "user": "YOUR_USERNAME",            # Same username in both accounts
+    "role": "ACCOUNTADMIN",
+    "warehouse": "COMPUTE_WH", 
+    "authenticator": "SNOWFLAKE_JWT",   # This enables JWT authentication
+    "private_key_file": "/Users/your_username/.ssh/snowflake_rsa_key.p8",  # Path to your private key
+}
+
+TARGET = {
+    "account": "YOUR_TARGET_ACCOUNT", 
+    "user": "YOUR_USERNAME",            # Same username as source
+    "role": "ACCOUNTADMIN",
+    "warehouse": "COMPUTE_WH",
+    "authenticator": "SNOWFLAKE_JWT",   # This enables JWT authentication  
+    "private_key_file": "/Users/your_username/.ssh/snowflake_rsa_key.p8",  # Same private key file
+}
+```
+
+### 5. Alternative: Encrypted Private Key (Optional)
+
+If you prefer a password-protected private key:
+
+```bash
+# Generate encrypted private key
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key_encrypted.p8
+
+# You'll be prompted for a passphrase
+```
+
+Then update the script configuration:
+
+```python
+SOURCE = {
+    # ... other settings ...
+    "private_key_file": "/path/to/rsa_key_encrypted.p8",
+    "private_key_file_pwd": "your_passphrase",  # Add this line
+}
+```
+
+### 6. Verify Authentication Setup
+
+Test your JWT authentication before running the migration:
+
+```python
+# Quick test script (save as test_auth.py)
+from snowflake.snowpark import Session
+
+config = {
+    "account": "YOUR_ACCOUNT",
+    "user": "YOUR_USERNAME", 
     "role": "ACCOUNTADMIN",
     "warehouse": "COMPUTE_WH",
     "authenticator": "SNOWFLAKE_JWT",
     "private_key_file": "/path/to/your/rsa_key.p8",
 }
 
-# Target Snowflake account
-TARGET = {
-    "account": "DEF67890-ZW12345",  # Your target account identifier
-    "user": "your_username",
-    "role": "ACCOUNTADMIN", 
-    "warehouse": "COMPUTE_WH",
-    "authenticator": "SNOWFLAKE_JWT",
-    "private_key_file": "/path/to/your/rsa_key.p8",
+try:
+    session = Session.builder.configs(config).create()
+    result = session.sql("SELECT CURRENT_USER(), CURRENT_ROLE()").collect()
+    print(f"✅ Authentication successful: {result[0]}")
+    session.close()
+except Exception as e:
+    print(f"❌ Authentication failed: {e}")
+```
+
+### 🛡️ Security Best Practices
+
+- **Never commit private keys** to version control (`.gitignore` protects you)
+- **Use file permissions 600** for private key files
+- **Store keys outside the project directory** (e.g., `~/.ssh/`)
+- **Use different key pairs** for different environments if needed
+- **Rotate keys periodically** for enhanced security
+- **Test authentication** before running large migrations
+
+## ⚙️ Configuration
+
+### Finding Your Snowflake Account Identifier
+
+Your Snowflake account identifier is found in your Snowflake URL:
+
+```
+https://<ACCOUNT_IDENTIFIER>.snowflakecomputing.com
+```
+
+**Examples:**
+- URL: `https://ABC12345.us-east-1.snowflakecomputing.com` → Account: `ABC12345.us-east-1`
+- URL: `https://mycompany.snowflakecomputing.com` → Account: `mycompany`
+- URL: `https://XYZ67890-AB12345.snowflakecomputing.com` → Account: `XYZ67890-AB12345`
+
+**To find your account identifier:**
+1. Log into your Snowflake web interface
+2. Copy the URL from your browser
+3. Extract the account identifier portion (everything before `.snowflakecomputing.com`)
+
+### Script Configuration
+
+Edit the **USER CONFIG** section in `snowflakeMig.py`:
+
+```python
+# Your Snowflake username (must be the same in both accounts)
+USERNAME = "your_username"  # e.g., "JOHN_DOE"
+
+# Source Snowflake account (where data currently exists)
+SOURCE = {
+    "account": "ABC12345.us-east-1",        # Your source account identifier
+    "user": "your_username",               # Same as USERNAME above
+    "role": "ACCOUNTADMIN",                # Role with sufficient privileges
+    "warehouse": "COMPUTE_WH",             # Existing warehouse for data processing
+    "authenticator": "SNOWFLAKE_JWT",      # Required for RSA key authentication
+    "private_key_file": "/Users/your_username/.ssh/snowflake_rsa_key.p8",
 }
 
-# Migration scope
-SOURCE_DB = "your_source_database"
-SOURCE_SCHEMA = "your_source_schema"
-TABLES = [
-    "table1",
-    "table2", 
-    "table3",
-    # Add your tables here
+# Target Snowflake account (where data will be migrated to)
+TARGET = {
+    "account": "DEF67890-ZW12345",         # Your target account identifier
+    "user": "your_username",               # Same username as source
+    "role": "ACCOUNTADMIN",                # Role with sufficient privileges
+    "warehouse": "COMPUTE_WH",             # Existing warehouse for data processing
+    "authenticator": "SNOWFLAKE_JWT",      # Required for RSA key authentication
+    "private_key_file": "/Users/your_username/.ssh/snowflake_rsa_key.p8",  # Same key file
+}
+
+# Migration source scope
+SOURCE_DB = "PRODUCTION_DB"              # Source database name
+SOURCE_SCHEMA = "PUBLIC"                 # Source schema name
+TABLES = [                               # Tables to migrate (case-insensitive)
+    "CUSTOMERS",
+    "ORDERS", 
+    "PRODUCTS",
+    "EMPLOYEES",
+    # Add your table names here
 ]
 
-# Target destination (can be same or different names)
-TARGET_DB = "your_target_database"
-TARGET_SCHEMA = "your_target_schema"
+# Migration target destination
+TARGET_DB = "PRODUCTION_DB"              # Target database (can be different name)
+TARGET_SCHEMA = "PUBLIC"                 # Target schema (can be different name)
 ```
+
+### Configuration Validation Checklist
+
+Before running the migration, verify:
+
+- ✅ **Account identifiers** are correct for both source and target
+- ✅ **Username** exists in both Snowflake accounts  
+- ✅ **RSA public key** is uploaded to user in both accounts
+- ✅ **Private key file** path is correct and file is readable
+- ✅ **Warehouses** exist and are accessible in both accounts
+- ✅ **Role** has sufficient privileges (ACCOUNTADMIN recommended)
+- ✅ **Source database/schema** exists and contains the specified tables
+- ✅ **Table names** are spelled correctly (script will validate this)
+
+### Common Configuration Issues
+
+| Issue | Solution |
+|-------|----------|
+| "Account not found" | Check account identifier format (include region if needed) |
+| "User does not exist" | Ensure username exists in both source and target accounts |
+| "Invalid private key" | Verify private key file path and format (.p8 PKCS#8) |
+| "Insufficient privileges" | Use ACCOUNTADMIN role or grant necessary privileges |
+| "Warehouse not found" | Ensure warehouse exists and user has USAGE privilege |
+| "Database/schema not found" | Verify database and schema names are correct |
 
 ## 🚀 Usage
 
